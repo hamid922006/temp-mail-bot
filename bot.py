@@ -8,7 +8,7 @@ import requests
 import random
 import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes,UNION
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes,Union
 
 users = {}
 
