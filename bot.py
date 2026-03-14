@@ -1,117 +1,97 @@
-# -----------------------------
-# Telegram Temp Mail OTP Bot
-# -----------------------------
-
-BOT_TOKEN = "8125617126:AAEElKkt2Rl7RvgRL2GKNTDFdplt5W69Eik"  # <-- BotFather থেকে token বসান
-
 import requests
 import random
 import re
+import sqlite3
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes,Union
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
-users = {}
+# ⚠️ আপনার নতুন টোকেন এখানে বসান (পুরনোটি ডিলিট করে দিন)
+BOT_TOKEN = "8125617126:AAEG89OKzuYucnYo3-eWOhfZfza6mRJuI8o" 
 
 # -----------------------------
-# Mail.tm API
+# SQLite Database Setup
+# -----------------------------
+# ডাটাবেস তৈরি বা কানেক্ট করা
+conn = sqlite3.connect("temp_mail.db", check_same_thread=False)
+cursor = conn.cursor()
+
+# ইউজারদের ডাটা সেভ করার জন্য টেবিল তৈরি
+cursor.execute('''CREATE TABLE IF NOT EXISTS users
+                  (user_id INTEGER PRIMARY KEY, email TEXT, token TEXT)''')
+conn.commit()
+
+def save_user(user_id, email, token):
+    cursor.execute("REPLACE INTO users (user_id, email, token) VALUES (?, ?, ?)", (user_id, email, token))
+    conn.commit()
+
+def get_user(user_id):
+    cursor.execute("SELECT email, token FROM users WHERE user_id = ?", (user_id,))
+    return cursor.fetchone()
+
+# -----------------------------
+# Mail.tm API Functions
 # -----------------------------
 def create_email():
-    domains = requests.get("https://api.mail.tm/domains").json()
-    domain = domains["hydra:member"][0]["domain"]
+    try:
+        domains = requests.get("https://api.mail.tm/domains", timeout=10).json()
+        domain = domains["hydra:member"][0]["domain"]
 
-    username = "user" + str(random.randint(10000,99999))
-    email = f"{username}@{domain}"
-    password = "123456"
+        username = "user" + str(random.randint(100000, 999999))
+        email = f"{username}@{domain}"
+        password = "SecurePassword123!"
 
-    data = {"address": email, "password": password}
+        data = {"address": email, "password": password}
+        requests.post("https://api.mail.tm/accounts", json=data, timeout=10)
 
-    requests.post("https://api.mail.tm/accounts", json=data)
+        token = requests.post(
+            "https://api.mail.tm/token",
+            json=data,
+            timeout=10
+        ).json()["token"]
 
-    token = requests.post(
-        "https://api.mail.tm/token",
-        json={"address": email, "password": password}
-    ).json()["token"]
-
-    return email, token
-
+        return email, token
+    except Exception as e:
+        print(f"Error in create_email: {e}")
+        return None, None
 
 def get_messages(token):
     headers = {"Authorization": f"Bearer {token}"}
-    return requests.get(
-        "https://api.mail.tm/messages",
-        headers=headers
-    ).json()
-
+    try:
+        return requests.get(
+            "https://api.mail.tm/messages",
+            headers=headers,
+            timeout=10
+        ).json()
+    except Exception as e:
+        print(f"Error in get_messages: {e}")
+        return None
 
 def find_otp(text):
+    # ৪ থেকে ৮ ডিজিটের সংখ্যা খুঁজবে
     return re.findall(r"\b\d{4,8}\b", text)
 
-
 # -----------------------------
-# Telegram Start
+# Telegram Handlers
 # -----------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
+# কীবোর্ড তৈরি করার ফাংশন যাতে বারবার একই কোড লিখতে না হয়
+def get_keyboard():
+    return InlineKeyboardMarkup([
         [InlineKeyboardButton("📧 New Email", callback_data="new")],
         [InlineKeyboardButton("📥 Inbox", callback_data="inbox")],
         [InlineKeyboardButton("🔑 Get OTP", callback_data="otp")]
-    ]
+    ])
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📬 Temp Mail OTP Bot Ready",
-        reply_markup=InlineKeyboardMarkup(keyboard)
+        "📬 Temp Mail OTP Bot Ready\n\nClick a button below to start:",
+        reply_markup=get_keyboard()
     )
 
-
-# -----------------------------
-# Button Handler
-# -----------------------------
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user_id = query.from_user.id
+    keyboard = get_keyboard()
 
     if query.data == "new":
-        email, token = create_email()
-        users[user_id] = token
-        await query.edit_message_text(f"📧 Temp Email Created:\n\n{email}")
-
-    elif query.data == "inbox":
-        token = users.get(user_id)
-        if not token:
-            await query.edit_message_text("❌ Create email first")
-            return
-        msgs = get_messages(token)
-        if msgs.get("hydra:totalItems",0) == 0:
-            await query.edit_message_text("📭 Inbox Empty")
-            return
-        text = ""
-        for m in msgs["hydra:member"]:
-            sender = m["from"]["address"]
-            subject = m["subject"]
-            text += f"From: {sender}\nSubject: {subject}\n\n"
-        await query.edit_message_text(text)
-
-    elif query.data == "otp":
-        token = users.get(user_id)
-        if not token:
-            await query.edit_message_text("❌ Create email first")
-            return
-        msgs = get_messages(token)
-        codes = []
-        for m in msgs["hydra:member"]:
-            codes += find_otp(m.get("intro",""))
-        if codes:
-            await query.edit_message_text("🔑 OTP Codes:\n\n" + "\n".join(codes))
-        else:
-            await query.edit_message_text("❌ No OTP Found")
-
-
-# -----------------------------
-# Run Bot
-# -----------------------------
-app = ApplicationBuilder().token(BOT_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CallbackQueryHandler(button))
-
-print("Bot Running...")
-app.run_polling()
+        await query.edit_message_
